@@ -74,26 +74,20 @@ Crea un repositorio Git con la estructura indicada arriba.
 ### 2. Configurar en Jenkins
 
 1. Ve a Manage Jenkins → System
-2. Busca la sección Global Pipeline Libraries
+2. Busca la sección Global Trusted Pipeline Libraries
 3. Click Add
 4. Configura:
    - Name: jenkins-shared-library
    - Default version: main
    - Allow default version to be overridden: marcado
    - Load implicitly: desmarcado
-   - Retrieval method: Modern SCM → Git
-   - Project Repository: URL de tu repositorio
-   - Credentials: (si el repo es privado)
-5. Click Save
+5. En Retrieval method selecciona Modern SCM
+6. Selecciona Git
+7. Project Repository: URL de tu repositorio
+8. Credentials: (si el repo es privado)
+9. Click Save
 
-### 3. Aprobar scripts
-
-La primera ejecución fallará porque Jenkins necesita aprobar los scripts:
-
-1. Ejecuta un pipeline que use la librería
-2. Ve a Manage Jenkins → In-process Script Approval
-3. Aprueba todos los scripts pendientes
-4. Vuelve a ejecutar
+Nota: Usar "Trusted" permite que la librería acceda a la API de Jenkins sin necesidad de aprobar scripts manualmente.
 
 ## Uso
 
@@ -256,12 +250,6 @@ Ejemplo:
 - Verificar que el folder _admin existe
 - Verificar que la credencial postgres-admin-credentials está dentro
 - Verificar que el ID es exactamente postgres-admin-credentials
-
-### Error: Scripts not approved
-
-1. Ir a Manage Jenkins → In-process Script Approval
-2. Aprobar scripts pendientes
-3. Volver a ejecutar
 
 ### Error: psql command not found
 
