@@ -2,20 +2,21 @@
 
 ## Qué es
 
-Shared library `jenkins-shared-library` que auto-crea:
+Shared library `shared-library-automatic-environment` que auto-crea:
 - Secretos en el folder del proyecto
 - Usuario PostgreSQL
 - Base de datos PostgreSQL
+- Schema PostgreSQL
 
 ## Prerequisitos
 
-- Shared library `jenkins-shared-library` configurada en Jenkins (Global Trusted Pipeline Libraries)
+- Shared library `shared-library-automatic-environment` configurada en Jenkins (Global Trusted Pipeline Libraries)
 - Folder `_admin` en Jenkins con credencial `postgres-admin-credentials` (Username with password del admin de PostgreSQL)
 
 ## Agregar a Jenkinsfile
 
 ```groovy
-@Library('jenkins-shared-library') _
+@Library('shared-library-automatic-environment') _
 
 def CONFIG = [
     projectName: 'NOMBRE_PROYECTO',
@@ -23,9 +24,10 @@ def CONFIG = [
     postgres: true,
     pgHost: 'HOST_POSTGRES',
     pgPort: '5432',
+    pgSchema: 'NOMBRE_SCHEMA',
     adminCredentialFolder: '_admin',
     adminCredentialId: 'postgres-admin-credentials',
-    secrets: ['db-credentials', 'db-url']
+    secrets: ['db-credentials', 'db-url', 'db-schema']
 ]
 
 pipeline {
@@ -42,7 +44,8 @@ pipeline {
             steps {
                 withCredentials([
                     usernamePassword(credentialsId: 'db-credentials', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASS'),
-                    string(credentialsId: 'db-url', variable: 'DATABASE_URL')
+                    string(credentialsId: 'db-url', variable: 'DATABASE_URL'),
+                    string(credentialsId: 'db-schema', variable: 'DB_SCHEMA')
                 ]) {
                     // tu código aquí
                 }
@@ -58,9 +61,10 @@ pipeline {
 |--------|-----------|---------|--------|
 | projectName | Sí | - | Nombre del proyecto |
 | environment | No | dev | dev / staging / prod |
-| postgres | No | false | Crear BD y usuario |
+| postgres | No | false | Crear BD, usuario y schema |
 | pgHost | No | postgres.tuempresa.com | Host PostgreSQL |
 | pgPort | No | 5432 | Puerto PostgreSQL |
+| pgSchema | No | {projectName}_{environment} | Nombre del schema |
 | adminCredentialFolder | No | _admin | Folder con cred admin |
 | adminCredentialId | No | postgres-admin-credentials | ID cred admin |
 | secrets | No | [] | Lista de secretos |
@@ -75,12 +79,13 @@ pipeline {
 | db-port | string | puerto |
 | db-name | string | nombre BD |
 | db-user | string | nombre usuario |
+| db-schema | string | nombre schema |
 | (otro) | string | aleatorio 32 chars |
 
 ## Nomenclatura auto
 
 ```
-projectName + environment = nombre BD y usuario
+projectName + environment = nombre BD, usuario y schema
 
 mi-api + dev = mi_api_dev
 mi-api + prod = mi_api_prod
@@ -88,14 +93,26 @@ mi-api + prod = mi_api_prod
 
 ## Ejemplos
 
-### Solo BD
+### BD completa con schema
 
 ```groovy
 def CONFIG = [
     projectName: 'mi-api',
     postgres: true,
     pgHost: 'postgres.empresa.com',
-    secrets: ['db-credentials', 'db-url']
+    secrets: ['db-credentials', 'db-url', 'db-schema']
+]
+```
+
+### Schema personalizado
+
+```groovy
+def CONFIG = [
+    projectName: 'mi-api',
+    postgres: true,
+    pgHost: 'postgres.empresa.com',
+    pgSchema: 'custom_schema',
+    secrets: ['db-credentials', 'db-url', 'db-schema']
 ]
 ```
 
@@ -117,7 +134,7 @@ def CONFIG = [
     environment: 'prod',
     postgres: true,
     pgHost: 'postgres-prod.empresa.com',
-    secrets: ['db-credentials', 'db-url', 'jwt-secret']
+    secrets: ['db-credentials', 'db-url', 'db-schema']
 ]
 ```
 
@@ -132,7 +149,7 @@ def CONFIG = [
     environment: ENV,
     pgHost: HOST,
     postgres: true,
-    secrets: ['db-credentials', 'db-url']
+    secrets: ['db-credentials', 'db-url', 'db-schema']
 ]
 ```
 
@@ -148,15 +165,18 @@ withCredentials([
 
 // String
 withCredentials([
-    string(credentialsId: 'db-url', variable: 'DATABASE_URL')
+    string(credentialsId: 'db-url', variable: 'DATABASE_URL'),
+    string(credentialsId: 'db-schema', variable: 'DB_SCHEMA')
 ]) {
     sh 'echo $DATABASE_URL'
+    sh 'echo $DB_SCHEMA'
 }
 
 // Múltiples
 withCredentials([
     usernamePassword(credentialsId: 'db-credentials', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASS'),
     string(credentialsId: 'db-url', variable: 'DATABASE_URL'),
+    string(credentialsId: 'db-schema', variable: 'DB_SCHEMA'),
     string(credentialsId: 'jwt-secret', variable: 'JWT_SECRET')
 ]) {
     sh './deploy.sh'

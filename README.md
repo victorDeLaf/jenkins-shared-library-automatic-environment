@@ -7,14 +7,14 @@ Librería compartida de Jenkins que crea automáticamente secretos, usuarios y b
 Cada vez que un pipeline se ejecuta:
 
 1. Verifica si los secretos ya existen en el folder del proyecto
-2. Verifica si el usuario y base de datos PostgreSQL ya existen
+2. Verifica si el usuario, base de datos y schema PostgreSQL ya existen
 3. Si falta algo, lo crea automáticamente
 4. Si todo existe, continúa sin hacer nada
 
 ## Estructura del repositorio
 
 ```
-jenkins-shared-library/
+shared-library-automatic-environment/
 ├── README.md
 └── vars/
     └── provision.groovy
@@ -77,7 +77,7 @@ Crea un repositorio Git con la estructura indicada arriba.
 2. Busca la sección Global Trusted Pipeline Libraries
 3. Click Add
 4. Configura:
-   - Name: jenkins-shared-library
+   - Name: shared-library-automatic-environment
    - Default version: main
    - Allow default version to be overridden: marcado
    - Load implicitly: desmarcado
@@ -94,52 +94,12 @@ Nota: Usar "Trusted" permite que la librería acceda a la API de Jenkins sin nec
 ### Ejemplo básico
 
 ```groovy
-@Library('jenkins-shared-library') _
+@Library('shared-library-automatic-environment') _
 
 def CONFIG = [
     projectName: 'mi-api',
     postgres: true,
-    secrets: ['db-credentials', 'db-url']
-]
-
-pipeline {
-    agent any
-    
-    stages {
-        stage('Provision') {
-            steps {
-                provision(CONFIG)
-            }
-        }
-        
-        stage('Deploy') {
-            steps {
-                withCredentials([
-                    usernamePassword(credentialsId: 'db-credentials', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASS'),
-                    string(credentialsId: 'db-url', variable: 'DATABASE_URL')
-                ]) {
-                    sh './deploy.sh'
-                }
-            }
-        }
-    }
-}
-```
-
-### Ejemplo completo
-
-```groovy
-@Library('jenkins-shared-library') _
-
-def CONFIG = [
-    projectName: 'mi-api',
-    environment: 'prod',
-    postgres: true,
-    pgHost: 'postgres-prod.tuempresa.com',
-    pgPort: '5432',
-    adminCredentialFolder: '_admin',
-    adminCredentialId: 'postgres-admin-credentials',
-    secrets: ['db-credentials', 'db-url', 'jwt-secret', 'api-key']
+    secrets: ['db-credentials', 'db-url', 'db-schema']
 ]
 
 pipeline {
@@ -157,6 +117,49 @@ pipeline {
                 withCredentials([
                     usernamePassword(credentialsId: 'db-credentials', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASS'),
                     string(credentialsId: 'db-url', variable: 'DATABASE_URL'),
+                    string(credentialsId: 'db-schema', variable: 'DB_SCHEMA')
+                ]) {
+                    sh './deploy.sh'
+                }
+            }
+        }
+    }
+}
+```
+
+### Ejemplo completo
+
+```groovy
+@Library('shared-library-automatic-environment') _
+
+def CONFIG = [
+    projectName: 'mi-api',
+    environment: 'prod',
+    postgres: true,
+    pgHost: 'postgres-prod.tuempresa.com',
+    pgPort: '5432',
+    pgSchema: 'custom_schema',
+    adminCredentialFolder: '_admin',
+    adminCredentialId: 'postgres-admin-credentials',
+    secrets: ['db-credentials', 'db-url', 'db-schema', 'jwt-secret', 'api-key']
+]
+
+pipeline {
+    agent any
+    
+    stages {
+        stage('Provision') {
+            steps {
+                provision(CONFIG)
+            }
+        }
+        
+        stage('Deploy') {
+            steps {
+                withCredentials([
+                    usernamePassword(credentialsId: 'db-credentials', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASS'),
+                    string(credentialsId: 'db-url', variable: 'DATABASE_URL'),
+                    string(credentialsId: 'db-schema', variable: 'DB_SCHEMA'),
                     string(credentialsId: 'jwt-secret', variable: 'JWT_SECRET')
                 ]) {
                     sh './deploy.sh'
@@ -170,7 +173,7 @@ pipeline {
 ### Solo secretos (sin PostgreSQL)
 
 ```groovy
-@Library('jenkins-shared-library') _
+@Library('shared-library-automatic-environment') _
 
 def CONFIG = [
     projectName: 'mi-frontend',
@@ -207,9 +210,10 @@ pipeline {
 |--------|------|-----------|---------|-------------|
 | projectName | String | Sí | - | Nombre del proyecto |
 | environment | String | No | dev | Ambiente (dev, staging, prod) |
-| postgres | Boolean | No | false | Crear usuario y BD en PostgreSQL |
+| postgres | Boolean | No | false | Crear usuario, BD y schema en PostgreSQL |
 | pgHost | String | No | postgres.tuempresa.com | Host de PostgreSQL |
 | pgPort | String | No | 5432 | Puerto de PostgreSQL |
+| pgSchema | String | No | {projectName}_{environment} | Nombre del schema |
 | adminCredentialFolder | String | No | _admin | Folder con credencial admin |
 | adminCredentialId | String | No | postgres-admin-credentials | ID de credencial admin |
 | secrets | List | No | [] | Lista de secretos a crear |
@@ -224,6 +228,7 @@ pipeline {
 | db-port | Text | Puerto del servidor |
 | db-name | Text | Nombre de la base de datos |
 | db-user | Text | Nombre del usuario |
+| db-schema | Text | Nombre del schema |
 | (cualquier otro) | Text | String aleatorio de 32 caracteres |
 
 ## Nomenclatura automática

@@ -22,6 +22,7 @@ def call(Map config) {
     
     def dbUser = "${safeProjectName}_${environment}"
     def dbName = "${safeProjectName}_${environment}"
+    def dbSchema = config.pgSchema ?: "${safeProjectName}_${environment}"
     
     echo "============================================"
     echo "AUTO-PROVISIONING"
@@ -30,6 +31,7 @@ def call(Map config) {
     echo "Ambiente:    ${environment}"
     echo "Folder:      ${folderPath ?: 'root'}"
     echo "PostgreSQL:  ${createPostgres}"
+    echo "Schema:      ${dbSchema}"
     echo "Secretos:    ${secrets}"
     echo "============================================"
     
@@ -83,18 +85,18 @@ def call(Map config) {
     
     // Crear PostgreSQL si es necesario
     if (needsPostgres) {
-        echo "Creando usuario y base de datos PostgreSQL..."
+        echo "Creando usuario, base de datos y schema en PostgreSQL..."
         def adminCreds = getCredentialsFromFolder(adminCredentialFolder, adminCredentialId)
-        createPostgresResources(pgHost, pgPort, adminCreds.username, adminCreds.password, dbUser, dbPass, dbName)
+        createPostgresResources(pgHost, pgPort, adminCreds.username, adminCreds.password, dbUser, dbPass, dbName, dbSchema)
         echo "✓ PostgreSQL configurado"
     }
     
     // Crear secretos faltantes
     if (!missingSecrets.isEmpty()) {
-        echo "Creando secretos en folder '${folderPath}'..."
+        echo "Creando secretos en folder '${folderPath ?: 'root'}'..."
         
         missingSecrets.each { secretId ->
-            def secretValue = generateSecretValue(secretId, dbUser, dbPass, dbName, pgHost, pgPort)
+            def secretValue = generateSecretValue(secretId, dbUser, dbPass, dbName, dbSchema, pgHost, pgPort)
             
             if (secretValue.type == 'usernamePassword') {
                 createUsernamePasswordSecret(folderPath, secretId, secretValue.username, secretValue.password)
@@ -108,20 +110,6 @@ def call(Map config) {
     
     echo "============================================"
     echo "✓ PROVISIONING COMPLETADO"
-    echo "============================================"
-    echo ""
-    echo "Para usar en tu pipeline:"
-    echo ""
-    echo "withCredentials(["
-    if (secrets.contains('db-credentials')) {
-        echo "    usernamePassword(credentialsId: 'db-credentials', usernameVariable: 'DB_USER', passwordVariable: 'DB_PASS'),"
-    }
-    if (secrets.contains('db-url')) {
-        echo "    string(credentialsId: 'db-url', variable: 'DATABASE_URL')"
-    }
-    echo "]) {"
-    echo "    sh './deploy.sh'"
-    echo "}"
     echo "============================================"
 }
 
@@ -168,7 +156,7 @@ def generateSecurePassword() {
     ).trim()
 }
 
-def generateSecretValue(String secretId, String dbUser, String dbPass, String dbName, String pgHost, String pgPort) {
+def generateSecretValue(String secretId, String dbUser, String dbPass, String dbName, String dbSchema, String pgHost, String pgPort) {
     switch(secretId) {
         case 'db-credentials':
             return [type: 'usernamePassword', username: dbUser, password: dbPass]
@@ -182,8 +170,9 @@ def generateSecretValue(String secretId, String dbUser, String dbPass, String db
             return [type: 'text', value: dbName]
         case 'db-user':
             return [type: 'text', value: dbUser]
+        case 'db-schema':
+            return [type: 'text', value: dbSchema]
         default:
-            // Cualquier otro secreto genera un valor aleatorio
             def randomValue = sh(
                 script: "openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32",
                 returnStdout: true
@@ -192,7 +181,7 @@ def generateSecretValue(String secretId, String dbUser, String dbPass, String db
     }
 }
 
-def createPostgresResources(String host, String port, String adminUser, String adminPass, String dbUser, String dbPass, String dbName) {
+def createPostgresResources(String host, String port, String adminUser, String adminPass, String dbUser, String dbPass, String dbName, String dbSchema) {
     sh """
         export PGPASSWORD='${adminPass}'
         
@@ -210,8 +199,16 @@ def createPostgresResources(String host, String port, String adminUser, String a
             psql -h ${host} -p ${port} -U ${adminUser} -d postgres -c "CREATE DATABASE ${dbName} OWNER ${dbUser};"
         fi
         
-        # Asegurar permisos
+        # Crear schema si no existe
+        SCHEMA_EXISTS=\$(psql -h ${host} -p ${port} -U ${adminUser} -d ${dbName} -tAc "SELECT 1 FROM information_schema.schemata WHERE schema_name='${dbSchema}'" 2>/dev/null || echo "")
+        if [ "\$SCHEMA_EXISTS" != "1" ]; then
+            echo "Creando schema ${dbSchema}..."
+            psql -h ${host} -p ${port} -U ${adminUser} -d ${dbName} -c "CREATE SCHEMA ${dbSchema} AUTHORIZATION ${dbUser};"
+        fi
+        
+        # Permisos
         psql -h ${host} -p ${port} -U ${adminUser} -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE ${dbName} TO ${dbUser};"
+        psql -h ${host} -p ${port} -U ${adminUser} -d ${dbName} -c "GRANT ALL PRIVILEGES ON SCHEMA ${dbSchema} TO ${dbUser};"
         
         echo "PostgreSQL configurado correctamente"
     """
@@ -253,7 +250,6 @@ def createUsernamePasswordSecret(String folderPath, String secretId, String user
     if (folderPath?.trim()) {
         folder = Jenkins.instance.getItemByFullName(folderPath)
     } else {
-        // Si no hay folder, crear en el store global
         def store = Jenkins.instance.getExtensionList('com.cloudbees.plugins.credentials.SystemCredentialsProvider')[0].getStore()
         def credential = new UsernamePasswordCredentialsImpl(
             CredentialsScope.GLOBAL,
@@ -278,7 +274,6 @@ def createUsernamePasswordSecret(String folderPath, String secretId, String user
     
     def store = property.store
     
-    // Eliminar si ya existe
     def existing = store.getCredentials(Domain.global()).find { it.id == secretId }
     if (existing) {
         store.removeCredentials(Domain.global(), existing)
@@ -302,7 +297,6 @@ def createTextSecret(String folderPath, String secretId, String value) {
     if (folderPath?.trim()) {
         folder = Jenkins.instance.getItemByFullName(folderPath)
     } else {
-        // Si no hay folder, crear en el store global
         def store = Jenkins.instance.getExtensionList('com.cloudbees.plugins.credentials.SystemCredentialsProvider')[0].getStore()
         def credential = new StringCredentialsImpl(
             CredentialsScope.GLOBAL,
@@ -326,7 +320,6 @@ def createTextSecret(String folderPath, String secretId, String value) {
     
     def store = property.store
     
-    // Eliminar si ya existe
     def existing = store.getCredentials(Domain.global()).find { it.id == secretId }
     if (existing) {
         store.removeCredentials(Domain.global(), existing)
