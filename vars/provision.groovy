@@ -21,7 +21,6 @@ def call(Map config) {
 
     def dbUser = "${safeProjectName}_${environment}"
     def dbName = "${safeProjectName}_${environment}"
-    def dbSchema = config.pgSchema ?: "${safeProjectName}_${environment}"
 
     echo "============================================"
     echo "AUTO-PROVISIONING"
@@ -30,7 +29,6 @@ def call(Map config) {
     echo "Ambiente:    ${environment}"
     echo "Folder:      ${folderPath ?: 'root'}"
     echo "PostgreSQL:  ${createPostgres}"
-    echo "Schema:      ${dbSchema}"
     echo "Secretos:    ${secrets}"
     echo "============================================"
 
@@ -86,7 +84,7 @@ def call(Map config) {
     if (needsPostgres) {
         echo "Creando usuario, base de datos y schema en PostgreSQL..."
         def adminCreds = getCredentialsFromFolder(adminCredentialFolder, adminCredentialId)
-        createPostgresResources(pgHost, pgPort, adminCreds.username, adminCreds.password, dbUser, dbPass, dbName, dbSchema)
+        createPostgresResources(pgHost, pgPort, adminCreds.username, adminCreds.password, dbUser, dbPass, dbName)
         echo "✓ PostgreSQL configurado"
     }
 
@@ -95,7 +93,7 @@ def call(Map config) {
         echo "Creando secretos en folder '${folderPath ?: 'root'}'..."
 
         missingSecrets.each { secretId ->
-            def secretValue = generateSecretValue(secretId, dbUser, dbPass, dbName, dbSchema, pgHost, pgPort)
+            def secretValue = generateSecretValue(secretId, dbUser, dbPass, dbName, pgHost, pgPort)
 
             if (secretValue.type == 'usernamePassword') {
                 createUsernamePasswordSecret(folderPath, secretId, secretValue.username, secretValue.password)
@@ -166,7 +164,7 @@ def generateSecurePassword() {
     ).trim()
 }
 
-def generateSecretValue(String secretId, String dbUser, String dbPass, String dbName, String dbSchema, String pgHost, String pgPort) {
+def generateSecretValue(String secretId, String dbUser, String dbPass, String dbName, String pgHost, String pgPort) {
     switch(secretId) {
         case 'db-credentials':
             return [type: 'usernamePassword', username: dbUser, password: dbPass]
@@ -181,7 +179,7 @@ def generateSecretValue(String secretId, String dbUser, String dbPass, String db
         case 'db-user':
             return [type: 'text', value: dbUser]
         case 'db-schema':
-            return [type: 'text', value: dbSchema]
+            return [type: 'text', value: 'public']
         default:
             def randomValue = sh(
                     script: "openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32",
@@ -191,14 +189,13 @@ def generateSecretValue(String secretId, String dbUser, String dbPass, String db
     }
 }
 
-def createPostgresResources(String host, String port, String adminUser, String adminPass, String dbUser, String dbPass, String dbName, String dbSchema) {
+def createPostgresResources(String host, String port, String adminUser, String adminPass, String dbUser, String dbPass, String dbName) {
     // Escribir todas las credenciales a archivos temporales
     writeFile file: '.pgadmin_user', text: adminUser
     writeFile file: '.pgadmin_pass', text: adminPass
     writeFile file: '.newdb_user', text: dbUser
     writeFile file: '.newdb_pass', text: dbPass
     writeFile file: '.newdb_name', text: dbName
-    writeFile file: '.newdb_schema', text: dbSchema
 
     sh '''#!/bin/bash
         set +x
@@ -209,10 +206,9 @@ def createPostgresResources(String host, String port, String adminUser, String a
         DB_USER=$(cat .newdb_user)
         DB_PASS=$(cat .newdb_pass)
         DB_NAME=$(cat .newdb_name)
-        DB_SCHEMA=$(cat .newdb_schema)
         
         # Limpiar archivos de credenciales inmediatamente
-        rm -f .pgadmin_user .pgadmin_pass .newdb_user .newdb_pass .newdb_name .newdb_schema
+        rm -f .pgadmin_user .pgadmin_pass .newdb_user .newdb_pass .newdb_name
         
         # Configurar .pgpass temporal
         PGPASS_FILE=$(mktemp)
@@ -221,34 +217,31 @@ def createPostgresResources(String host, String port, String adminUser, String a
         export PGPASSFILE="$PGPASS_FILE"
         
         # Verificar y crear usuario
-        USER_EXISTS=$(psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" 2>/dev/null || echo "")
+        USER_EXISTS=$(psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'")
         if [ "$USER_EXISTS" != "1" ]; then
             echo "Creando usuario $DB_USER..."
             psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+        else
+            echo "✓ Usuario $DB_USER ya existe"
         fi
         
         # Verificar y crear base de datos
-        DB_EXISTS=$(psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" 2>/dev/null || echo "")
+        DB_EXISTS=$(psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'")
         if [ "$DB_EXISTS" != "1" ]; then
             echo "Creando base de datos $DB_NAME..."
             psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
-        fi
-        
-        # Verificar y crear schema
-        SCHEMA_EXISTS=$(psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d "$DB_NAME" -tAc "SELECT 1 FROM information_schema.schemata WHERE schema_name='$DB_SCHEMA'" 2>/dev/null || echo "")
-        if [ "$SCHEMA_EXISTS" != "1" ]; then
-            echo "Creando schema $DB_SCHEMA..."
-            psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d "$DB_NAME" -c "CREATE SCHEMA $DB_SCHEMA AUTHORIZATION $DB_USER;"
+        else
+            echo "✓ Base de datos $DB_NAME ya existe"
         fi
         
         # Asignar permisos
         psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
-        psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON SCHEMA $DB_SCHEMA TO $DB_USER;"
+        psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON SCHEMA public TO $DB_USER;"
         
         # Limpiar archivo pgpass
         rm -f "$PGPASS_FILE"
         
-        echo "PostgreSQL configurado correctamente"
+        echo "✓ PostgreSQL configurado correctamente"
     '''
 }
 
