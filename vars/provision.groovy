@@ -2,7 +2,6 @@ import com.cloudbees.plugins.credentials.*
 import com.cloudbees.plugins.credentials.domains.*
 import com.cloudbees.plugins.credentials.impl.*
 import com.cloudbees.plugins.credentials.common.*
-import com.cloudbees.plugins.credentials.folders.FolderCredentialsProperty
 import org.jenkinsci.plugins.plaincredentials.impl.*
 import com.cloudbees.hudson.plugins.folder.*
 import hudson.util.Secret
@@ -222,7 +221,7 @@ def createPostgresResources(String host, String port, String adminUser, String a
 def getCredentialsFromFolder(String folderPath, String credentialsId) {
     def folder = Jenkins.instance.getItemByFullName(folderPath)
     
-    if (!(folder instanceof Folder)) {
+    if (!folder) {
         return null
     }
     
@@ -244,37 +243,43 @@ def getCredentialsFromFolder(String folderPath, String credentialsId) {
 }
 
 @NonCPS
+def getCredentialsStore(def item) {
+    def stores = CredentialsProvider.lookupStores(item)
+    for (store in stores) {
+        if (store.getContext() == item) {
+            return store
+        }
+    }
+    return stores.find { true }
+}
+
+@NonCPS
 def createUsernamePasswordSecret(String folderPath, String secretId, String username, String password) {
-    def folder
+    def item
+    def store
     
     if (folderPath?.trim()) {
-        folder = Jenkins.instance.getItemByFullName(folderPath)
+        item = Jenkins.instance.getItemByFullName(folderPath)
+        if (!item) {
+            throw new Exception("Folder no encontrado: ${folderPath}")
+        }
+        store = getCredentialsStore(item)
     } else {
-        def store = Jenkins.instance.getExtensionList('com.cloudbees.plugins.credentials.SystemCredentialsProvider')[0].getStore()
-        def credential = new UsernamePasswordCredentialsImpl(
-            CredentialsScope.GLOBAL,
-            secretId,
-            "Auto-provisioned by Jenkins Shared Library",
-            username,
-            password
-        )
-        store.addCredentials(Domain.global(), credential)
-        return
+        store = Jenkins.instance.getExtensionList('com.cloudbees.plugins.credentials.SystemCredentialsProvider')[0].getStore()
     }
     
-    if (!(folder instanceof Folder)) {
-        throw new Exception("Folder no encontrado: ${folderPath}")
+    if (!store) {
+        throw new Exception("No se pudo obtener el credentials store")
     }
     
-    def property = folder.properties.get(FolderCredentialsProperty)
-    if (!property) {
-        folder.addProperty(new FolderCredentialsProperty([]))
-        property = folder.properties.get(FolderCredentialsProperty)
-    }
+    // Eliminar si ya existe
+    def existing = CredentialsProvider.lookupCredentials(
+        StandardUsernamePasswordCredentials.class,
+        item ?: Jenkins.instance,
+        null,
+        []
+    ).find { it.id == secretId }
     
-    def store = property.store
-    
-    def existing = store.getCredentials(Domain.global()).find { it.id == secretId }
     if (existing) {
         store.removeCredentials(Domain.global(), existing)
     }
@@ -292,35 +297,31 @@ def createUsernamePasswordSecret(String folderPath, String secretId, String user
 
 @NonCPS
 def createTextSecret(String folderPath, String secretId, String value) {
-    def folder
+    def item
+    def store
     
     if (folderPath?.trim()) {
-        folder = Jenkins.instance.getItemByFullName(folderPath)
+        item = Jenkins.instance.getItemByFullName(folderPath)
+        if (!item) {
+            throw new Exception("Folder no encontrado: ${folderPath}")
+        }
+        store = getCredentialsStore(item)
     } else {
-        def store = Jenkins.instance.getExtensionList('com.cloudbees.plugins.credentials.SystemCredentialsProvider')[0].getStore()
-        def credential = new StringCredentialsImpl(
-            CredentialsScope.GLOBAL,
-            secretId,
-            "Auto-provisioned by Jenkins Shared Library",
-            Secret.fromString(value)
-        )
-        store.addCredentials(Domain.global(), credential)
-        return
+        store = Jenkins.instance.getExtensionList('com.cloudbees.plugins.credentials.SystemCredentialsProvider')[0].getStore()
     }
     
-    if (!(folder instanceof Folder)) {
-        throw new Exception("Folder no encontrado: ${folderPath}")
+    if (!store) {
+        throw new Exception("No se pudo obtener el credentials store")
     }
     
-    def property = folder.properties.get(FolderCredentialsProperty)
-    if (!property) {
-        folder.addProperty(new FolderCredentialsProperty([]))
-        property = folder.properties.get(FolderCredentialsProperty)
-    }
+    // Eliminar si ya existe
+    def existing = CredentialsProvider.lookupCredentials(
+        com.cloudbees.plugins.credentials.common.StandardCredentials.class,
+        item ?: Jenkins.instance,
+        null,
+        []
+    ).find { it.id == secretId }
     
-    def store = property.store
-    
-    def existing = store.getCredentials(Domain.global()).find { it.id == secretId }
     if (existing) {
         store.removeCredentials(Domain.global(), existing)
     }
