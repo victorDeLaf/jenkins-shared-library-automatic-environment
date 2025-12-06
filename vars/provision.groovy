@@ -32,7 +32,6 @@ def call(Map config) {
     echo "Secretos:    ${secrets}"
     echo "============================================"
 
-    // Verificar qué secretos faltan
     def missingSecrets = []
     secrets.each { secretId ->
         if (!checkSecretExists(secretId)) {
@@ -43,7 +42,6 @@ def call(Map config) {
         }
     }
 
-    // Verificar si PostgreSQL necesita crearse
     def needsPostgres = false
     if (createPostgres) {
         def adminCreds = getCredentialsFromFolder(adminCredentialFolder, adminCredentialId)
@@ -58,7 +56,6 @@ def call(Map config) {
         }
     }
 
-    // Si todo existe, terminar
     if (missingSecrets.isEmpty() && !needsPostgres) {
         echo "============================================"
         echo "✓ Todo existe, nada que provisionar"
@@ -70,7 +67,6 @@ def call(Map config) {
     echo "Iniciando provisioning..."
     echo "============================================"
 
-    // Generar password para BD
     def dbPass = ""
     def needsDbPassword = needsPostgres ||
             missingSecrets.contains('db-credentials') ||
@@ -80,7 +76,6 @@ def call(Map config) {
         dbPass = generateSecurePassword()
     }
 
-    // Crear PostgreSQL si es necesario
     if (needsPostgres) {
         echo "Creando usuario, base de datos y schema en PostgreSQL..."
         def adminCreds = getCredentialsFromFolder(adminCredentialFolder, adminCredentialId)
@@ -88,7 +83,6 @@ def call(Map config) {
         echo "✓ PostgreSQL configurado"
     }
 
-    // Crear secretos faltantes
     if (!missingSecrets.isEmpty()) {
         echo "Creando secretos en folder '${folderPath ?: 'root'}'..."
 
@@ -110,10 +104,6 @@ def call(Map config) {
     echo "============================================"
 }
 
-// ============================================
-// FUNCIONES DE VERIFICACIÓN
-// ============================================
-
 def checkSecretExists(String secretId) {
     try {
         withCredentials([string(credentialsId: secretId, variable: 'TEST')]) {
@@ -131,31 +121,23 @@ def checkSecretExists(String secretId) {
 }
 
 def checkPostgresUserExists(String host, String port, String adminUser, String adminPass, String targetUser) {
-    // Escribir credenciales a archivos temporales
     writeFile file: '.pgadmin_user', text: adminUser
     writeFile file: '.pgadmin_pass', text: adminPass
     writeFile file: '.pgtarget_user', text: targetUser
 
-    def result = sh(
-            script: '''#!/bin/bash
-            set +x
-            PG_USER=$(cat .pgadmin_user)
-            PG_PASS=$(cat .pgadmin_pass)
-            TARGET=$(cat .pgtarget_user)
-            rm -f .pgadmin_user .pgadmin_pass .pgtarget_user
-            
-            export PGPASSWORD="$PG_PASS"
-            psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$TARGET'" 2>/dev/null || echo ""
-        ''',
-            returnStdout: true
-    ).trim()
+    def script = """#!/bin/bash
+set +x
+PG_USER=\$(cat .pgadmin_user)
+PG_PASS=\$(cat .pgadmin_pass)
+TARGET=\$(cat .pgtarget_user)
+rm -f .pgadmin_user .pgadmin_pass .pgtarget_user
+export PGPASSWORD="\$PG_PASS"
+psql -h ${host} -p ${port} -U "\$PG_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='\$TARGET'" 2>/dev/null || echo ""
+"""
 
+    def result = sh(script: script, returnStdout: true).trim()
     return result == "1"
 }
-
-// ============================================
-// FUNCIONES DE CREACIÓN
-// ============================================
 
 def generateSecurePassword() {
     return sh(
@@ -190,64 +172,50 @@ def generateSecretValue(String secretId, String dbUser, String dbPass, String db
 }
 
 def createPostgresResources(String host, String port, String adminUser, String adminPass, String dbUser, String dbPass, String dbName) {
-    // Escribir todas las credenciales a archivos temporales
     writeFile file: '.pgadmin_user', text: adminUser
     writeFile file: '.pgadmin_pass', text: adminPass
     writeFile file: '.newdb_user', text: dbUser
     writeFile file: '.newdb_pass', text: dbPass
     writeFile file: '.newdb_name', text: dbName
 
-    sh '''#!/bin/bash
-        set +x
-        
-        # Leer credenciales de archivos
-        PG_ADMIN_USER=$(cat .pgadmin_user)
-        PG_ADMIN_PASS=$(cat .pgadmin_pass)
-        DB_USER=$(cat .newdb_user)
-        DB_PASS=$(cat .newdb_pass)
-        DB_NAME=$(cat .newdb_name)
-        
-        # Limpiar archivos de credenciales inmediatamente
-        rm -f .pgadmin_user .pgadmin_pass .newdb_user .newdb_pass .newdb_name
-        
-        # Configurar .pgpass temporal
-        PGPASS_FILE=$(mktemp)
-        chmod 600 "$PGPASS_FILE"
-        echo "''' + host + ''':''' + port + ''':*:$PG_ADMIN_USER:$PG_ADMIN_PASS" > "$PGPASS_FILE"
-        export PGPASSFILE="$PGPASS_FILE"
-        
-        # Verificar y crear usuario
-        USER_EXISTS=$(psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'")
-        if [ "$USER_EXISTS" != "1" ]; then
-            echo "Creando usuario $DB_USER..."
-            psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
-        else
-            echo "✓ Usuario $DB_USER ya existe"
-        fi
-        
-        # Verificar y crear base de datos
-        DB_EXISTS=$(psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'")
-        if [ "$DB_EXISTS" != "1" ]; then
-            echo "Creando base de datos $DB_NAME..."
-            psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
-        else
-            echo "✓ Base de datos $DB_NAME ya existe"
-        fi
-        
-        # Asignar permisos
-        psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
-        psql -h ''' + host + ''' -p ''' + port + ''' -U "$PG_ADMIN_USER" -d "$DB_NAME" -c "GRANT ALL PRIVILEGES ON SCHEMA public TO $DB_USER;"
-        
-        # Limpiar archivo pgpass
-        rm -f "$PGPASS_FILE"
-        
-        echo "✓ PostgreSQL configurado correctamente"
-    '''
-}
+    def script = """#!/bin/bash
+set +x
 
-// ============================================
-// FUNCIONES @NonCPS (Acceso directo a Jenkins API)
-// ============================================
+PG_ADMIN_USER=\$(cat .pgadmin_user)
+PG_ADMIN_PASS=\$(cat .pgadmin_pass)
+DB_USER=\$(cat .newdb_user)
+DB_PASS=\$(cat .newdb_pass)
+DB_NAME=\$(cat .newdb_name)
+
+rm -f .pgadmin_user .pgadmin_pass .newdb_user .newdb_pass .newdb_name
+
+DB_PASS_ESCAPED=\$(echo "\$DB_PASS" | sed "s/'/''/g")
+
+PGPASS_FILE=\$(mktemp)
+chmod 600 "\$PGPASS_FILE"
+echo "${host}:${port}:*:\$PG_ADMIN_USER:\$PG_ADMIN_PASS" > "\$PGPASS_FILE"
+export PGPASSFILE="\$PGPASS_FILE"
+
+USER_EXISTS=\$(psql -h ${host} -p ${port} -U "\$PG_ADMIN_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='\$DB_USER'")
+if [ "\$USER_EXISTS" != "1" ]; then
+    echo "Creando usuario \$DB_USER..."
+    psql -h ${host} -p ${port} -U "\$PG_ADMIN_USER" -d postgres -c "CREATE USER \$DB_USER WITH PASSWORD '\$DB_PASS_ESCAPED';"
+fi
+
+DB_EXISTS=\$(psql -h ${host} -p ${port} -U "\$PG_ADMIN_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\$DB_NAME'")
+if [ "\$DB_EXISTS" != "1" ]; then
+    echo "Creando base de datos \$DB_NAME..."
+    psql -h ${host} -p ${port} -U "\$PG_ADMIN_USER" -d postgres -c "CREATE DATABASE \$DB_NAME OWNER \$DB_USER;"
+fi
+
+psql -h ${host} -p ${port} -U "\$PG_ADMIN_USER" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \$DB_NAME TO \$DB_USER;"
+psql -h ${host} -p ${port} -U "\$PG_ADMIN_USER" -d "\$DB_NAME" -c "GRANT ALL PRIVILEGES ON SCHEMA public TO \$DB_USER;"
+
+rm -f "\$PGPASS_FILE"
+"""
+
+    sh script
+}
 
 @NonCPS
 def getCredentialsFromFolder(String folderPath, String credentialsId) {
@@ -304,7 +272,6 @@ def createUsernamePasswordSecret(String folderPath, String secretId, String user
         throw new Exception("No se pudo obtener el credentials store")
     }
 
-    // Eliminar si ya existe
     def existing = CredentialsProvider.lookupCredentials(
             StandardUsernamePasswordCredentials.class,
             item ?: Jenkins.instance,
@@ -319,7 +286,7 @@ def createUsernamePasswordSecret(String folderPath, String secretId, String user
     def credential = new UsernamePasswordCredentialsImpl(
             CredentialsScope.GLOBAL,
             secretId,
-            "Auto-provisioned by Jenkins Shared Library",
+            "Auto-provisioned",
             username,
             password
     )
@@ -346,7 +313,6 @@ def createTextSecret(String folderPath, String secretId, String value) {
         throw new Exception("No se pudo obtener el credentials store")
     }
 
-    // Eliminar si ya existe
     def existing = CredentialsProvider.lookupCredentials(
             com.cloudbees.plugins.credentials.common.StandardCredentials.class,
             item ?: Jenkins.instance,
@@ -361,7 +327,7 @@ def createTextSecret(String folderPath, String secretId, String value) {
     def credential = new StringCredentialsImpl(
             CredentialsScope.GLOBAL,
             secretId,
-            "Auto-provisioned by Jenkins Shared Library",
+            "Auto-provisioned",
             Secret.fromString(value)
     )
 
