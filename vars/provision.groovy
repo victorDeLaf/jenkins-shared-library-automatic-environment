@@ -2,9 +2,9 @@ import com.cloudbees.plugins.credentials.*
 import com.cloudbees.plugins.credentials.domains.*
 import com.cloudbees.plugins.credentials.impl.*
 import com.cloudbees.plugins.credentials.common.*
+import com.cloudbees.plugins.credentials.folders.FolderCredentialsProperty
 import org.jenkinsci.plugins.plaincredentials.impl.*
 import com.cloudbees.hudson.plugins.folder.*
-import com.cloudbees.hudson.plugins.folder.properties.*
 import hudson.util.Secret
 
 def call(Map config) {
