@@ -48,11 +48,22 @@ def call(Map config) {
         if (!adminCreds) {
             error "No se encontró la credencial '${adminCredentialId}' en el folder '${adminCredentialFolder}'"
         }
-        needsPostgres = !checkPostgresUserExists(pgHost, pgPort, adminCreds.username, adminCreds.password, dbUser)
-        if (needsPostgres) {
+
+        def userExists = checkPostgresUserExists(pgHost, pgPort, adminCreds.username, adminCreds.password, dbUser)
+        def dbExists = checkPostgresDatabaseExists(pgHost, pgPort, adminCreds.username, adminCreds.password, dbName)
+
+        if (!userExists) {
             echo "✗ Usuario PostgreSQL '${dbUser}' no existe"
+            needsPostgres = true
         } else {
             echo "✓ Usuario PostgreSQL '${dbUser}' ya existe"
+        }
+
+        if (!dbExists) {
+            echo "✗ Base de datos '${dbName}' no existe"
+            needsPostgres = true
+        } else {
+            echo "✓ Base de datos '${dbName}' ya existe"
         }
     }
 
@@ -133,6 +144,25 @@ TARGET=\$(cat .pgtarget_user)
 rm -f .pgadmin_user .pgadmin_pass .pgtarget_user
 export PGPASSWORD="\$PG_PASS"
 psql -h ${host} -p ${port} -U "\$PG_USER" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='\$TARGET'" 2>/dev/null || echo ""
+"""
+
+    def result = sh(script: script, returnStdout: true).trim()
+    return result == "1"
+}
+
+def checkPostgresDatabaseExists(String host, String port, String adminUser, String adminPass, String dbName) {
+    writeFile file: '.pgadmin_user', text: adminUser
+    writeFile file: '.pgadmin_pass', text: adminPass
+    writeFile file: '.pgdb_name', text: dbName
+
+    def script = """#!/bin/bash
+set +x
+PG_USER=\$(cat .pgadmin_user)
+PG_PASS=\$(cat .pgadmin_pass)
+DB_NAME=\$(cat .pgdb_name)
+rm -f .pgadmin_user .pgadmin_pass .pgdb_name
+export PGPASSWORD="\$PG_PASS"
+psql -h ${host} -p ${port} -U "\$PG_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\$DB_NAME'" 2>/dev/null || echo ""
 """
 
     def result = sh(script: script, returnStdout: true).trim()
